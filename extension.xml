@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<software>
+    <metadata>
+        <name>OC Dropbox</name>
+        <version>1.0 alpha</version>
+        <copyright>Copyright (C) 2011 OpenContent</copyright>
+        <license>GNU General Public License v2.0</license>
+        <info_url>http://www.opencontent.it</info_url>
+    </metadata>
+
+    <dependencies>
+        <uses>
+        </uses>
+        <requires>
+        </requires>
+    </dependencies>
+</software>
