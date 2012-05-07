@@ -1,340 +1,458 @@
 <?php
 
 /**
- * Dropbox API class 
- * 
- * @package Dropbox 
- * @copyright Copyright (C) 2010 Rooftop Solutions. All rights reserved.
- * @author Evert Pot (http://www.rooftopsolutions.nl/) 
- * @license http://code.google.com/p/dropbox-php/wiki/License MIT
+ * Dropbox API base class
+ * @author Ben Tadiar <ben@handcraftedbyben.co.uk>
+ * @link https://github.com/benthedesigner/dropbox
+ * @link https://www.dropbox.com/developers
+ * @link https://status.dropbox.com Dropbox status
+ * @todo Add Dropbox Exception classes
+ * @package Dropbox
  */
-class Dropbox_API {
-
-    /**
-     * Sandbox root-path
-     */
-    const ROOT_SANDBOX = 'sandbox';
-
-    /**
-     * Dropbox root-path
-     */
-    const ROOT_DROPBOX = 'dropbox';
-
-    /**
-     * OAuth object 
-     * 
-     * @var Dropbox_OAuth
-     */
-    protected $oauth;
-    
-    /**
-     * Default root-path, this will most likely be 'sandbox' or 'dropbox' 
-     * 
-     * @var string 
-     */
-    protected $root;
-
-    /**
-     * Constructor 
-     * 
-     * @param Dropbox_OAuth Dropbox_Auth object
-     * @param string $root default root path (sandbox or dropbox) 
-     */
-    public function __construct(Dropbox_OAuth $oauth, $root = self::ROOT_DROPBOX) {
-
-        $this->oauth = $oauth;
-        $this->root = $root;
-
-    }
-
-    /**
-     * Returns OAuth tokens based on an email address and passwords
-     *
-     * This can be used to bypass the regular oauth workflow.
-     *
-     * This method returns an array with 2 elements:
-     *   * token
-     *   * secret
-     *
-     * @param string $email 
-     * @param string $password 
-     * @return array 
-     */
-    public function getToken($email, $password) {
-
-        $data = $this->oauth->fetch('http://api.dropbox.com/0/token', array(
-            'email' => $email, 
-            'password' => $password
-        ),'POST');
-
-        $data = json_decode($data['body']); 
-        return array(
-            'token' => $data->token,
-            'token_secret' => $data->secret,
-        );
-
-    }
-
-    /**
-     * Returns information about the current dropbox account 
-     * 
-     * @return stdclass 
-     */
-    public function getAccountInfo() {
-
-        $data = $this->oauth->fetch('http://api.dropbox.com/0/account/info');
-        return json_decode($data['body'],true);
-
-    }
-
-    /**
-     * Creates a new Dropbox account
-     *
-     * @param string $email 
-     * @param string $first_name 
-     * @param string $last_name 
-     * @param string $password 
-     * @return bool 
-     */
-    public function createAccount($email, $first_name, $last_name, $password) {
-
-        $result = $this->oauth->fetch('http://api.dropbox.com/0/account',array(
-            'email'      => $email,
-            'first_name' => $first_name,
-            'last_name'  => $last_name,
-            'password'   => $password,
-          ), 'POST');
-
-        return $result['body']==='OK'; 
-
-    }
-
-
-    /**
-     * Returns a file's contents 
-     * 
-     * @param string $path path 
-     * @param string $root Use this to override the default root path (sandbox/dropbox) 
-     * @return string 
-     */
-    public function getFile($path = '', $root = null) {
-
-        if (is_null($root)) $root = $this->root;
-        $result = $this->oauth->fetch('http://api-content.dropbox.com/0/files/' . $root . '/' . ltrim($path,'/'));
-        return $result['body'];
-
-    }
-
-    /**
-     * Uploads a new file
-     *
-     * @param string $path Target path (including filename) 
-     * @param string $file Either a path to a file or a stream resource 
-     * @param string $root Use this to override the default root path (sandbox/dropbox)  
-     * @return bool 
-     */
-    public function putFile($path, $file, $root = null) {
-
-        $directory = dirname($path);
-        $filename = basename($path);
-
-        if($directory==='.') $directory = '';
-        if (is_null($root)) $root = $this->root;
-
-        if (is_string($file)) {
-
-            $file = fopen($file,'r');
-
-        } elseif (!is_resource($file)) {
-
-            throw new Dropbox_Exception('File must be a file-resource or a string');
-            
-        }
-        $this->multipartFetch('http://api-content.dropbox.com/0/files/' . $root . '/' . trim($directory,'/'), $file, $filename);
-        return true;
-    }
-
-
-    /**
-     * Copies a file or directory from one location to another 
-     *
-     * This method returns the file information of the newly created file.
-     *
-     * @param string $from source path 
-     * @param string $to destination path 
-     * @param string $root Use this to override the default root path (sandbox/dropbox)  
-     * @return stdclass 
-     */
-    public function copy($from, $to, $root = null) {
-
-        if (is_null($root)) $root = $this->root;
-        $response = $this->oauth->fetch('http://api.dropbox.com/0/fileops/copy', array('from_path' => $from, 'to_path' => $to, 'root' => $root));
-
-        return json_decode($response['body'],true);
-
-    }
-
-    /**
-     * Creates a new folder 
-     *
-     * This method returns the information from the newly created directory
-     *
-     * @param string $path 
-     * @param string $root Use this to override the default root path (sandbox/dropbox)  
-     * @return stdclass 
-     */
-    public function createFolder($path, $root = null) {
-
-        if (is_null($root)) $root = $this->root;
-
-        // Making sure the path starts with a /
-        $path = '/' . ltrim($path,'/');
-
-        $response = $this->oauth->fetch('http://api.dropbox.com/0/fileops/create_folder', array('path' => $path, 'root' => $root),'POST');
-        return json_decode($response['body'],true);
-
-    }
-
-    /**
-     * Deletes a file or folder.
-     *
-     * This method will return the metadata information from the deleted file or folder, if successful.
-     * 
-     * @param string $path Path to new folder 
-     * @param string $root Use this to override the default root path (sandbox/dropbox)  
-     * @return array 
-     */
-    public function delete($path, $root = null) {
-
-        if (is_null($root)) $root = $this->root;
-        $response = $this->oauth->fetch('http://api.dropbox.com/0/fileops/delete', array('path' => $path, 'root' => $root));
-        return json_decode($response['body']);
-
-    }
-
-    /**
-     * Moves a file or directory to a new location 
-     *
-     * This method returns the information from the newly created directory
-     *
-     * @param mixed $from Source path 
-     * @param mixed $to destination path
-     * @param string $root Use this to override the default root path (sandbox/dropbox) 
-     * @return stdclass 
-     */
-    public function move($from, $to, $root = null) {
-
-        if (is_null($root)) $root = $this->root;
-        $response = $this->oauth->fetch('http://api.dropbox.com/0/fileops/move', array('from_path' => $from, 'to_path' => $to, 'root' => $root));
-
-        return json_decode($response['body'],true);
-
-    }
-
-    /**
-     * Returns a list of links for a directory
-     *
-     * The links can be used to securely open files throug a browser. The links are cookie protected
-     * so a user is asked to login if there's no valid session cookie.
-     *
-     * @param string $path Path to directory or file
-     * @param string $root Use this to override the default root path (sandbox/dropbox)
-     * @deprecated This method is no longer supported
-     * @return array 
-     */
-    public function getLinks($path, $root = null) {
-
-        throw new Dropbox_Exception('This API method is currently broken, and dropbox documentation about this is no longer online. Please ask Dropbox support if you really need this.');
-
-        /*
-        if (is_null($root)) $root = $this->root;
-        
-        $response = $this->oauth->fetch('http://api.dropbox.com/0/links/' . $root . '/' . ltrim($path,'/'));
-        return json_decode($response,true);
-        */ 
-
-    }
-
-    /**
-     * Returns file and directory information
-     * 
-     * @param string $path Path to receive information from 
-     * @param bool $list When set to true, this method returns information from all files in a directory. When set to false it will only return infromation from the specified directory.
-     * @param string $hash If a hash is supplied, this method simply returns true if nothing has changed since the last request. Good for caching.
-     * @param int $fileLimit Maximum number of file-information to receive 
-     * @param string $root Use this to override the default root path (sandbox/dropbox) 
-     * @return array|true 
-     */
-    public function getMetaData($path, $list = true, $hash = null, $fileLimit = null, $root = null) {
-
-        if (is_null($root)) $root = $this->root;
-
-        $args = array(
-            'list' => $list,
-        );
-
-        if (!is_null($hash)) $args['hash'] = $hash; 
-        if (!is_null($fileLimit)) $args['file_limit'] = $hash; 
-
-        $response = $this->oauth->fetch('http://api.dropbox.com/0/metadata/' . $root . '/' . ltrim($path,'/'), $args);
-
-        /* 304 is not modified */
-        if ($response['httpStatus']==304) {
-            return true; 
-        } else {
-            return json_decode($response['body'],true);
-        }
-
-    } 
-
-    /**
-     * Returns a thumbnail (as a string) for a file path. 
-     * 
-     * @param string $path Path to file 
-     * @param string $size small, medium or large 
-     * @param string $root Use this to override the default root path (sandbox/dropbox)  
-     * @return string 
-     */
-    public function getThumbnail($path, $size = 'small', $root = null) {
-
-        if (is_null($root)) $root = $this->root;
-        $response = $this->oauth->fetch('http://api-content.dropbox.com/0/thumbnails/' . $root . '/' . ltrim($path,'/'),array('size' => $size));
-
-        return $response['body'];
-
-    }
-
-    /**
-     * This method is used to generate multipart POST requests for file upload 
-     * 
-     * @param string $uri 
-     * @param array $arguments 
-     * @return bool 
-     */
-    protected function multipartFetch($uri, $file, $filename) {
-
-        /* random string */
-        $boundary = 'R50hrfBj5JYyfR3vF3wR96GPCC9Fd2q2pVMERvEaOE3D8LZTgLLbRpNwXek3';
-
-        $headers = array(
-            'Content-Type' => 'multipart/form-data; boundary=' . $boundary,
-        );
-
-        $body="--" . $boundary . "\r\n";
-        $body.="Content-Disposition: form-data; name=file; filename=".$filename."\r\n";
-        $body.="Content-type: application/octet-stream\r\n";
-        $body.="\r\n";
-        $body.=stream_get_contents($file);
-        $body.="\r\n";
-        $body.="--" . $boundary . "--";
-
-        // Dropbox requires the filename to also be part of the regular arguments, so it becomes
-        // part of the signature. 
-        $uri.='?file=' . $filename;
-
-        return $this->oauth->fetch($uri, $body, 'POST', $headers);
-
-    }
-
-
+namespace Dropbox;
+
+class API
+{
+	// API Endpoints
+	const API_URL     = 'https://api.dropbox.com/1/';
+	const CONTENT_URL = 'https://api-content.dropbox.com/1/';
+	
+	/**
+	 * OAuth consumer object
+	 * @var null|OAuth\Consumer 
+	 */
+	private $OAuth;
+	
+	/**
+	 * The root level for file paths
+	 * Either `dropbox` or `sandbox` (preferred)
+	 * @var null|string
+	 */
+	private $root;
+	
+	/**
+	 * Format of the API response
+	 * @var string
+	 */
+	private $responseFormat = 'php';
+	
+	/**
+	 * JSONP callback
+	 * @var string
+	 */
+	private $callback = 'dropboxCallback';
+	
+	/**
+	 * Set the OAuth consumer object
+	 * @param OAuth\Consumer $OAuth
+	 */
+	public function __construct(OAuth\Consumer\ConsumerAbstract $OAuth, $root = 'sandbox')
+	{
+		$this->OAuth = $OAuth;
+		$this->setRoot($root);
+	}
+	
+	/**
+	* Set the root level
+	* @param mixed $root
+	* @throws Exception
+	* @return void
+	*/
+	public function setRoot($root)
+	{
+		if($root !== 'sandbox' && $root !== 'dropbox'){
+			throw new Exception("Expected a root of either 'dropbox' or 'sandbox', got '$root'");
+		} else {
+			$this->root = $root;
+		}
+	}
+	
+	/**
+	 * Retrieves information about the user's account
+	 * @return object stdClass
+	 */
+	public function accountInfo()
+	{
+		$response = $this->fetch('POST', self::API_URL, 'account/info');
+		return $response;
+	}
+	
+	/**
+	 * Uploads a physical file from disk
+	 * Dropbox impose a 150MB limit to files uploaded via the API. If the file
+	 * exceeds this limit or does not exist, an Exception will be thrown
+	 * @param string $file Absolute path to the file to be uploaded
+	 * @param string|bool $filename The destination filename of the uploaded file
+	 * @param string $path Path to upload the file to, relative to root
+	 * @param boolean $overwrite Should the file be overwritten? (Default: true)
+	 * @return object stdClass
+	 */
+	public function putFile($file, $filename = false, $path = '', $overwrite = true)
+	{
+		if(file_exists($file)){
+			if(filesize($file) <= 157286400){
+				$call = 'files/' . $this->root . '/' . $this->encodePath($path);
+				// If no filename is provided we'll use the original filename
+				$filename = (is_string($filename)) ? $filename : basename($file);
+				$params = array(
+					'filename' => $filename,
+					'file' => '@' . str_replace('\\', '/', $file) . ';filename=' . $filename,
+					'overwrite' => (int) $overwrite,
+				);
+				$response = $this->fetch('POST', self::CONTENT_URL, $call, $params);
+				return $response;
+			}
+			throw new Exception('File exceeds 150MB upload limit');
+		}
+		
+		// Throw an Exception if the file does not exist
+		throw new Exception('Local file ' . $file . ' does not exist');
+	}
+	
+	/**
+	 * Uploads file data from a stream
+	 * Note: This function is experimental and requires further testing
+	 * @todo Add filesize check
+	 * @param resource $stream A readable stream created using fopen()
+	 * @param string $filename The destination filename, including path
+	 * @param boolean $overwrite Should the file be overwritten? (Default: true)
+	 * @return array
+	 */
+	public function putStream($stream, $filename, $overwrite = true)
+	{
+		$this->OAuth->setInFile($stream);
+		$path = $this->encodePath($filename);
+		$call = 'files_put/' . $this->root . '/' . $path;
+		$params = array('overwrite' => (int) $overwrite);
+		$response = $this->fetch('PUT', self::CONTENT_URL, $call, $params);
+		return $response;
+	}
+	
+	/**
+	 * Downloads a file
+	 * Returns the base filename, raw file data and mime type returned by Fileinfo
+	 * @param string $file Path to file, relative to root, including path
+	 * @param string $outFile Filename to write the downloaded file to
+	 * @param string $revision The revision of the file to retrieve
+	 * @return array
+	 */
+	public function getFile($file, $outFile = false, $revision = null)
+	{
+		// Only allow php response format for this call
+		if($this->responseFormat !== 'php'){
+			throw new Exception('This method only supports the `php` response format');
+		}
+		
+		$handle = null;
+		if($outFile !== false){
+			// Create a file handle if $outFile is specified
+			if(!$handle = fopen($outFile, 'w')){
+				throw new Exception("Unable to open file handle for $outFile");
+			} else {
+				$this->OAuth->setOutFile($handle);
+			}
+		}
+		
+		$file = $this->encodePath($file);		
+		$call = 'files/' . $this->root . '/' . $file;
+		$params = array('rev' => $revision);
+		$response = $this->fetch('GET', self::CONTENT_URL, $call, $params);
+		
+		// Close the file handle if one was opened
+		if($handle) fclose($handle);
+
+		return array(
+			'name' => ($outFile) ? $outFile : basename($file),
+			'mime' => $this->getMimeType(($outFile) ?: $response['body'], $outFile),
+			'meta' => json_decode($response['headers']['x-dropbox-metadata']),
+			'data' => $response['body'],
+		);
+	}
+	
+	/**
+	 * Retrieves file and folder metadata
+	 * @param string $path The path to the file/folder, relative to root
+	 * @param string $rev Return metadata for a specific revision (Default: latest rev)
+	 * @param int $limit Maximum number of listings to return
+	 * @param string $hash Metadata hash to compare against
+	 * @param bool $list Return contents field with response
+	 * @param bool $deleted Include files/folders that have been deleted
+	 * @return object stdClass 
+	 */
+	public function metaData($path = null, $rev = null, $limit = 10000, $hash = false, $list = true, $deleted = false)
+	{
+		$call = 'metadata/' . $this->root . '/' . $this->encodePath($path);
+		$params = array(
+			'file_limit' => ($limit < 1) ? 1 : (($limit > 10000) ? 10000 : (int) $limit),
+			'hash' => (is_string($hash)) ? $hash : 0,
+			'list' => (int) $list,
+			'include_deleted' => (int) $deleted,
+			'rev' => (is_string($rev)) ? $rev : null,
+		);
+		$response = $this->fetch('POST', self::API_URL, $call, $params);
+		return $response;
+	}
+	
+	/**
+	 * Obtains metadata for the previous revisions of a file
+	 * @param string Path to the file, relative to root
+	 * @param integer Number of revisions to return (1-1000)
+	 * @return array
+	 */
+	public function revisions($file, $limit = 10)
+	{
+		$call = 'revisions/' . $this->root . '/' . $this->encodePath($file);
+		$params = array(
+			'rev_limit' => ($limit < 1) ? 1 : (($limit > 1000) ? 1000 : (int) $limit),
+		);
+		$response = $this->fetch('GET', self::API_URL, $call, $params);
+		return $response;
+	}
+	
+	/**
+	 * Restores a file path to a previous revision
+	 * @param string $file Path to the file, relative to root
+	 * @param string $revision The revision of the file to restore
+	 * @return object stdClass
+	 */
+	public function restore($file, $revision)
+	{
+		$call = 'restore/' . $this->root . '/' . $this->encodePath($file);
+		$params = array('rev' => $revision);
+		$response = $this->fetch('POST', self::API_URL, $call, $params);
+		return $response;
+	}
+	
+	/**
+	 * Returns metadata for all files and folders that match the search query
+	 * @param mixed $query The search string. Must be at least 3 characters long
+	 * @param string $path The path to the folder you want to search in
+	 * @param integer $limit Maximum number of results to return (1-1000)
+	 * @param boolean $deleted Include deleted files/folders in the search
+	 * @return array
+	 */
+	public function search($query, $path = '', $limit = 1000, $deleted = false)
+	{
+		$call = 'search/' . $this->root . '/' . $this->encodePath($path);
+		$params = array(
+			'query' => $query,
+			'file_limit' => ($limit < 1) ? 1 : (($limit > 1000) ? 1000 : (int) $limit),
+			'include_deleted' => (int) $deleted,
+		);
+		$response = $this->fetch('GET', self::API_URL, $call, $params);
+		return $response;
+	}
+	
+	/**
+	 * Creates and returns a shareable link to files or folders
+	 * @param string $path The path to the file/folder you want a sharable link to
+	 * @return object stdClass
+	 */
+	public function shares($path)
+	{
+		$call = 'shares/' . $this->root . '/' .$this->encodePath($path);
+		$response = $this->fetch('POST', self::API_URL, $call);
+		return $response;
+	}
+	
+	/**
+	 * Returns a link directly to a file
+	 * @param string $path The path to the media file you want a direct link to
+	 * @return object stdClass
+	 */
+	public function media($path)
+	{
+		$call = 'media/' . $this->root . '/' . $this->encodePath($path);
+		$response = $this->fetch('POST', self::API_URL, $call);
+		return $response;
+	}
+	
+	/**
+	 * Gets a thumbnail for an image
+	 * @param string $file The path to the image you wish to thumbnail
+	 * @param string $format The thumbnail format, either JPEG or PNG
+	 * @param string $size The size of the thumbnail
+	 * @return array
+	 */
+	public function thumbnails($file, $format = 'JPEG', $size = 'small')
+	{
+		// Only allow php response format for this call
+		if($this->responseFormat !== 'php'){
+			throw new Exception('This method only supports the `php` response format');
+		}
+		
+		$format = strtoupper($format);
+		// If $format is not 'PNG', default to 'JPEG'
+		if($format != 'PNG') $format = 'JPEG';
+		
+		$size = strtolower($size);
+		$sizes = array('s', 'm', 'l', 'xl', 'small', 'medium', 'large');
+		// If $size is not valid, default to 'small'
+		if(!in_array($size, $sizes)) $size = 'small';
+		
+		$call = 'thumbnails/' . $this->root . '/' . $this->encodePath($file);
+		$params = array('format' => $format, 'size' => $size);
+		$response = $this->fetch('GET', self::CONTENT_URL, $call, $params);
+		
+		return array(
+			'name' => basename($file),
+			'mime' => $this->getMimeType($response['body']),
+			'meta' => json_decode($response['headers']['x-dropbox-metadata']),
+			'data' => $response['body'],
+		);
+	}
+	
+	/**
+	 * Copies a file or folder to a new location
+	 * @param string $from File or folder to be copied, relative to root
+	 * @param string $to Destination path, relative to root
+	 * @return object stdClass
+	 */
+	public function copy($from, $to)
+	{
+		$call = 'fileops/copy';
+		$params = array(
+			'root' => $this->root,
+			'from_path' => $this->normalisePath($from),
+			'to_path' => $this->normalisePath($to),
+		);
+		$response = $this->fetch('POST', self::API_URL, $call, $params);
+		return $response;
+	}
+	
+	/**
+	 * Creates a folder
+	 * @param string New folder to create relative to root
+	 * @return object stdClass
+	 */
+	public function create($path)
+	{
+		$call = 'fileops/create_folder';
+		$params = array('root' => $this->root, 'path' => $this->normalisePath($path));
+		$response = $this->fetch('POST', self::API_URL, $call, $params);
+		return $response;
+	}
+	
+	/**
+	 * Deletes a file or folder
+	 * @param string $path The path to the file or folder to be deleted
+	 * @return object stdClass
+	 */
+	public function delete($path)
+	{
+		$call = 'fileops/delete';
+		$params = array('root' => $this->root, 'path' => $this->normalisePath($path));
+		$response = $this->fetch('POST', self::API_URL, $call, $params);
+		return $response;
+	}
+	
+	/**
+	 * Moves a file or folder to a new location
+	 * @param string $from File or folder to be moved, relative to root
+	 * @param string $to Destination path, relative to root
+	 * @return object stdClass
+	 */
+	public function move($from, $to)
+	{
+		$call = 'fileops/move';
+		$params = array(
+				'root' => $this->root,
+				'from_path' => $this->normalisePath($from),
+				'to_path' => $this->normalisePath($to),
+		);
+		$response = $this->fetch('POST', self::API_URL, $call, $params);
+		return $response;
+	}
+	
+	/**
+	 * Intermediate fetch function
+	 * @param string $method The HTTP method
+	 * @param string $url The API endpoint
+	 * @param string $call The API method to call
+	 * @param array $params Additional parameters
+	 * @return mixed
+	 */
+	private function fetch($method, $url, $call, array $params = array())
+	{
+		// Make the API call via the consumer
+		$response = $this->OAuth->fetch($method, $url, $call, $params);
+		
+		// Format the response and return
+		switch($this->responseFormat){
+			case 'json':
+				return json_encode($response);
+			case 'jsonp':
+				$response = json_encode($response);
+				return $this->callback . '(' . $response . ')';
+			default:
+				return $response;
+		}
+	}
+	
+	/**
+	 * Set the API response format
+	 * @param string $format One of php, json or jsonp
+	 * @return void
+	 */
+	public function setResponseFormat($format)
+	{
+		$format = strtolower($format);
+		if(!in_array($format, array('php', 'json', 'jsonp'))){
+			throw new Exception("Expected a format of php, json or jsonp, got '$format'");
+		} else {
+			$this->responseFormat = $format;
+		}
+	}
+	
+	/**
+	* Set the JSONP callback function
+	* @param string $function
+	* @return void
+	*/
+	public function setCallback($function)
+	{
+		$this->callback = $function;
+	}
+	
+	/**
+	 * Get the mime type of downloaded file
+	 * If the Fileinfo extension is not loaded, return false
+	 * @param string $data File contents as a string or filename
+	 * @param string $isFilename Is $data a filename?
+	 * @return boolean|string Mime type and encoding of the file
+	 */
+	private function getMimeType($data, $isFilename = false)
+	{
+		if(extension_loaded('fileinfo')){
+			$finfo = new \finfo(FILEINFO_MIME);
+			if($isFilename !== false) return $finfo->file($data);
+			return $finfo->buffer($data);
+		}
+		return false;
+	}
+	
+	/**
+	 * Trim the path of forward slashes and replace
+	 * consecutive forward slashes with a single slash
+	 * @param string $path The path to normalise
+	 * @return string
+	 */
+	private function normalisePath($path)
+	{
+		$path = preg_replace('#/+#', '/', trim($path, '/'));
+		return $path;
+	}
+	
+	/**
+	 * Encode the path, then replace encoded slashes
+	 * with literal forward slash characters
+	 * @param string $path The path to encode
+	 * @return string
+	 */
+	private function encodePath($path)
+	{
+		$path = $this->normalisePath($path);
+		$path = str_replace('%2F', '/', rawurlencode($path));
+		return $path;
+	}
 }

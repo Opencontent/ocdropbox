@@ -1,8 +1,10 @@
 <div class="context-block dropbox-dashboard">
 	<div class="box-header">
-		<h1 class="context-title"><a href={'dropbox/dashboard/'|ezurl}>Dropbox</a>
+		<h1 class="context-title">Dropbox
         {if $parent} - <a href={concat('dropbox/dashboard/', $parent.id)|ezurl}>{$parent.path}</a>{/if}</h1>
-		<div class="header-mainline"></div>
+		<div class="header-mainline">
+            Account: {$account} (<a href={"dropbox/disconnect"|ezurl()}>Disconnect</a>)
+        </div>
 	</div>
 
 	<div class="box-content">
@@ -18,7 +20,7 @@
         {def $object = false()
              $node = false()}
         {foreach $list as $t}
-        {set $object = fetch( 'content', 'object', hash( 'object_id', $t.object_id))}            
+        {set $object = first_set( fetch( 'content', 'object', hash( 'object_id', $t.object_id)), false() )}
         {if $parent|not()}
             {if $object}
             <tr>
@@ -30,8 +32,9 @@
                     {/if}
                 </td>
                 <td>{$t.path}</td>
-                <td>{$t.modified|l10n(datetime)}</td>            
-                {if $object}
+                <td>{$t.modified|l10n(datetime)}</td> 
+                
+                {if is_set( $object.main_node )}
                     {set $node = $object.main_node}
                     <td><a href={$node.url_alias|ezurl}>{$node.name|wash()}</a></td>
                     <td>{$node.class_identifier}</td>   
@@ -51,7 +54,7 @@
                 </td>
                 <td>{$t.path}</td>
                 <td>{$t.modified|l10n(datetime)}</td>            
-                {if $object}
+                {if is_set( $object.main_node )}
                     {set $node = $object.main_node}
                     <td><a href={$node.url_alias|ezurl}>{$node.name|wash()}</a></td>
                     <td>{$node.class_identifier}</td>   

@@ -12,6 +12,7 @@ $ViewList['dashboard'] = array(
     'params' => array( 'ID' ),
     'unordered_params' => array( ) );
 
+$ViewList['disconnect'] = array( 'script' => 'disconnect.php' );
 
 $FunctionList = array();
 $FunctionList['dashboard'] = array();

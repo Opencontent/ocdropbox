@@ -1,9 +1,10 @@
 <?php /*
-        
-[TemplateSettings]
-ExtensionAutoloadPath[]=ocdropbox
 
-[DesignSettings]
-AdditionalSiteDesignList[]=standard
+[Cache]
+CacheItems[]=dropbox
+
+[Cache_dropbox]
+name=Dropbox temp files
+path=dropbox
 
 */ ?>

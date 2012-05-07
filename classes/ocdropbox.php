@@ -6,6 +6,7 @@
 
 require_once('autoload.php');
 
+
 class OCDropbox
 {
     private static $instance;
@@ -14,6 +15,7 @@ class OCDropbox
 	private	$dropbox;
 	private $basePath;
     private $ini;
+    private $accountInfo;
     
     public $rootNode;
     public $varDir;
@@ -28,18 +30,9 @@ class OCDropbox
     {
         $this->ini  = eZINI::instance( 'dropbox.ini' );
         $consKey    = $this->ini->variable( 'DropBoxConfig', 'ConsumerKey' );
-    	$consSec    = $this->ini->variable( 'DropBoxConfig', 'ConsumerSecret' );
-    	$login      = $this->ini->variable( 'DropBoxConfig', 'DropBoxLogin' );
-    	$password   = $this->ini->variable( 'DropBoxConfig', 'DropBoxPassword' );
+    	$consSec    = $this->ini->variable( 'DropBoxConfig', 'ConsumerSecret' );    	
         
-        $siteIni = eZINI::instance( 'site.ini' );
-        $var = $siteIni->variable( 'FileSettings','VarDir' );
-        $this->varDir = $var . '/storage/original/dropbox/';
-        if ( !is_dir( $this->varDir ) )
-        {
-            eZDir::mkdir( $this->varDir, false, true );
-        }
-        
+        $this->varDir = eZSys::cacheDirectory() . ezSys::fileSeparator() . eZINI::instance()->variable( 'Cache_dropbox', 'path' ) . ezSys::fileSeparator();
         $this->mapDropboxFolder = $this->ini->variable( 'DropBoxConfig', 'MapDropboxFolder' );
         $this->mapDropboxSubFolder = $this->ini->variable( 'DropBoxConfig', 'MapDropboxSubFolder' );
         
@@ -54,16 +47,29 @@ class OCDropbox
             $this->rootNode   = 2;
         }
         
-        if ( !( $consKey || $consSec || $login || $password ) )
+        if ( !( $consKey || $consSec ) )
         {
-            die('====================================' ."\n". '=== INI DropBoxConfig not found! ===' ."\n". '====================================');
+            $this->log( 'INI DropBoxConfig not found!' );
+            eZExecution::cleanExit();
         }
         
-        $this->oauth    = new Dropbox_OAuth_PEAR( $consKey, $consSec );
-        $this->dropbox  = new Dropbox_API( $this->oauth );
-		$tokens         = $this->dropbox->getToken( $login, $password );
-		
-        $this->oauth->setToken( $tokens['token'], $tokens['token_secret'] );    	
+        $dropboxToken = eZSiteData::fetchByName( 'dropbox_token' );
+        if ( !$dropboxToken )
+        {
+            $this->log( 'Authorize first: visit your <your_site_backend>/dropbox/dashboard' );
+            eZExecution::cleanExit();
+        }
+        
+        $token = unserialize( $dropboxToken->attribute( 'value' ) );        
+        
+        $encrypter = new \Dropbox\OAuth\Storage\Encrypter( md5( 'ocdropbox' ) );
+        $storage = new \Dropbox\OAuth\Storage\Session( $encrypter );
+        $storage->set( $token, 'access_token' );        
+        $OAuth = new \Dropbox\OAuth\Consumer\Curl( $consKey, $consSec, $storage );
+        $this->dropbox = new \Dropbox\API( $OAuth );
+        $this->dropbox->setResponseFormat( 'php' );
+        $this->accountInfo = $this->dropbox->accountInfo();
+        
     }
     
 	public static function getInstance()
@@ -87,33 +93,31 @@ class OCDropbox
      * @return array
      * 
      */    
-    function getDropboxData($path = '', $directoryContents = true)
+    function getDropboxData($path = '')
     {
 		
-    	if($path == ''){
+    	if ( $path == '' ){
 	    	$path = $this->basePath; 
     	}
         
-        $path = $this->sanitize_path( $path );
-    	
         try 
         {
-			$info = $this->dropbox->getMetaData( $path, $directoryContents );
-            return $info;
+			$info = $this->dropbox->metaData( $path );
+            //eZCLI::instance()->error( var_export( $info,1 ) );
+            return $info['body'];
         }
         catch ( Exception $e)
         {
-            eZDebug::writeError( "Error in ". $path . "\n" . $e . "\n", __METHOD__ );
+            $this->log( "Error in <". $path . ">: " . $e->getMessage() . "\n", 'error', __METHOD__ );
         	return false;
         }        
 
     }           
 
-    function getFile($path)
+    function getFile( $path )
     {
-    	$path = $this->sanitize_path( $path );
         $file = $this->dropbox->getFile( $path );
-    	return $file;
+    	return $file['data'];
     }
     
     private function createContainer( $name = 'No name', $parentNodeID = false, $class_identifier = false, $user = false )
@@ -157,7 +161,7 @@ class OCDropbox
          
         if ( $contentObject )
         {
-            eZDebug::writeNotice( "Created Content Object: ID = " .  $contentObject->attribute( 'id' ) . " NAME = " . $contentObject->attribute( 'name' ), __METHOD__  );
+            $this->log( "Created Content Object: ID = " .  $contentObject->attribute( 'id' ) . " NAME = " . $contentObject->attribute( 'name' ), 'notice', __METHOD__  );
         }
         $db->commit();
         return $contentObject;
@@ -167,23 +171,18 @@ class OCDropbox
     {
         $db = eZDB::instance();
         $db->begin();
-        
-        $fileName = basename( $dropboxFileData['path'] );
+
+        $fileName = basename( $dropboxFileData->path );
         $filePath = $this->varDir . $fileName;
-        $h = fopen($filePath,'w');
-        $dropboxFileDataPath = $dropboxFileData['path'];
-        if($h)
+        $dropboxFileDataPath = $dropboxFileData->path;
+        
+        if ( !eZFile::create( $fileName, $this->varDir, $this->getFile( $dropboxFileDataPath ) ) )        
         {
-            fwrite($h, $this->getFile($dropboxFileDataPath));
-            fclose($h);
-        }
-        else
-        {
-            print_r("Error opening " . $filePath . "\n\n");
+            $this->log( "Error opening " . $filePath, 'error', __METHOD__ );
             $db->commit();
             return false;
         }
-        
+
         $currentUser = eZUser::currentUser();
         $user = eZUser::fetchByName( 'admin' );
         if ( $user ) {
@@ -193,24 +192,34 @@ class OCDropbox
         $result = array( 'errors' => array() );
         $upload = new eZContentUpload();
         
-        if ( $updateEzObject )
+        try
         {
-            $upload->handleLocalFile( &$result, $filePath, $parentNodeID, $updateEzObject );
+            if ( $updateEzObject )
+            {
+                $upload->handleLocalFile( $result, $filePath, $parentNodeID, $updateEzObject );
+            }
+            else
+            {
+                $upload->handleLocalFile( $result, $filePath, $parentNodeID, false );
+            }
         }
-        else
-        {
-            $upload->handleLocalFile( &$result, $filePath, $parentNodeID, false );
+        catch( Exception $e )
+        {            
+            $this->log( 'Error importing ' . $filePath . ': ' . $e->getMessage(), 'error', __METHOD__ );
+            $db->commit();
+            unlink($filePath);
+            return false;
         }
         
         eZUser::setCurrentlyLoggedInUser( $currentUser, $currentUser->attribute( 'contentobject_id' ) );
         
-        if ( empty( $result['errors']) && !empty( $result['contentobject']) )
+        if ( empty( $result['errors'] ) && !empty( $result['contentobject']) )
         {
             if ( $updateDropboxDB )
             {
-                $ocdo = OCDropboxObject::fetchByPath( $dropboxFileData['path'] );
+                $ocdo = OCDropboxObject::fetchByPath( $dropboxFileData->path );
                 $ocdo->setAttribute( 'object_id', $result['contentobject']->attribute('id') );
-                $ocdo->setAttribute( 'modified', strtotime( $dropboxFileData['modified'] ) );
+                $ocdo->setAttribute( 'modified', strtotime( $dropboxFileData->modified ) );
                 $ocdo->store();
             }
             else
@@ -218,36 +227,35 @@ class OCDropbox
                 $ocdo = new OCDropboxObject( array(
                     'parent_id' => $parentOCDropboxObjectID, 
                     'is_dir'    => false,
-                    'path'      => $dropboxFileData['path'],
-                    'modified'  => strtotime( $dropboxFileData['modified'] ),
+                    'path'      => $dropboxFileData->path,
+                    'modified'  => strtotime( $dropboxFileData->modified ),
                     'object_id' => $result['contentobject']->attribute('id')
                 ));
                 $ocdo->store();
             }
             $db->commit();
-            unlink($filePath);
+            //unlink($filePath);
             return true;
         }
-        $db->commit();
-        unlink($filePath);
-        return false;
-    }
-    
-    private function sanitize_path( $path )
-    {
-        $parts = explode('/', $path);
-        $newPath = '';
-        foreach ($parts as $key => $p)
+        else
         {
-            if ( $key > 0 )
-                $newPath .= '/'; 
-            $newPath .= rawurlencode($p);
+            $errors = array();
+            if ( !empty( $result['errors'] ) )
+            {
+                foreach( $result['errors'] as $error )
+                {
+                    $errors[] = $error['description'];
+                }
+            }
+            $this->log( 'Error importing ' . $filePath . ': ' . implode( ' ', $errors ), 'error', __METHOD__ );
+            $db->commit();
+            unlink($filePath);
+            return false;
         }
         
-        return $newPath;
     }
     
-    public function importDropboxData( $cli = false )
+    public function importDropboxData()
     {        
         // current user
         $user = eZUser::fetchByName( 'admin' );
@@ -256,79 +264,46 @@ class OCDropbox
             $user = eZUser::currentUser();
         }
         
-        if ( $cli )
-        {
-            $cli->output( 'Using user: '.$user->attribute( 'login' ) );
-        }
-        else
-        {
-            eZDebug::writeNotice( 'Using user: '.$user->attribute( 'login' ), __METHOD__ );
-        }
-        
-        // Dropbox account
-        if ( $cli )
-        {
-            $cli->output( 'Using DropBox account: '. $this->ini->variable( 'DropBoxConfig', 'DropBoxLogin' ) );
-            $cli->output( 'Importing from DropBox folder: '. $this->basePath );
-        }
-        else
-        {
-            eZDebug::writeNotice( 'Using user: '.$this->ini->variable( 'DropBoxConfig', 'DropBoxLogin' ), __METHOD__ );
-            eZDebug::writeNotice( 'Importing from DropBox folder: '. $this->basePath, __METHOD__ );
-        }        
+        $this->log( 'Using user: '.$user->attribute( 'login' ), 'notice', __METHOD__ );
+        $this->log( 'Using DropBox account: '. $this->accountInfo['body']->display_name, 'notice', __METHOD__ ); 
+        $this->log( 'Importing from DropBox folder: '. $this->basePath, 'notice', __METHOD__ );
         
         // root node
-        $rootNode = eZContentObjectTreeNode::fetch( $this->rootNode ); 
-        if ( $cli ) 
+        $rootNode = eZContentObjectTreeNode::fetch( $this->rootNode );
+        if ( !$rootNode )
         {
-            $cli->output( 'Import in: '. $rootNode->attribute( 'name' ) . ' (path: ' . $rootNode->attribute( 'path_string' ) . ')' );
+            $this->log( "Root node $this->rootNode do not exist", 'error' );
+            eZExecution::cleanExit();
         }
-        else
-        {
-            eZDebug::writeNotice( 'Import in: '. $rootNode->attribute( 'name' ) . ' (path: ' . $rootNode->attribute( 'path_string' ) . ')', __METHOD__ );
-        }
+        $this->log( 'Import in: '. $rootNode->attribute( 'name' ) . ' (path: ' . $rootNode->attribute( 'path_string' ) . ')', 'notice', __METHOD__ );
         
         // get Dropbox data
-        $data = $this->getDropboxData();
-        if ( isset( $data['contents'] ) )
+        $data = $this->getDropboxData();        
+        if ( isset( $data->contents ) )
         {
-            foreach( $data['contents'] as $content )
+            foreach( $data->contents as $content )
             {
-                $this->iterateData($content, 0, $rootNode->attribute('node_id'), $cli);
+                $this->iterateData($content, 0, $rootNode->attribute('node_id') );
             }
         }
         
     }
     
-    private function iterateData($dropboxItem, $parentDropboxObjectId, $parentNodeID, $cli = false)
+    private function iterateData($dropboxItem, $parentDropboxObjectId, $parentNodeID )
     {
 
-        $path = $dropboxItem['path'];
+        $path = $dropboxItem->path;
         
         $dropboxItem = $metaData = $this->getDropboxData( $path );
-        if ( $cli ) 
-        {
-            $cli->output( '--> Request meta data for: '. $path );
-        }
-        else
-        {
-            eZDebug::writeNotice( 'Request meta data for: '. $path, __METHOD__ );
-        }        
+        $this->log( '--> Request meta data for: '. $path, 'notice', __METHOD__ );
         
         if (!$metaData)
         {
-            if ( $cli ) 
-            {
-                $cli->output( 'Not meta data found for: '. $path );
-            }
-            else
-            {
-                eZDebug::writeNotice( 'Not meta data found for: '. $path, __METHOD__ );
-            }
+            $this->log( 'Not meta data found for: '. $path, 'error', __METHOD__ );
             return;
         }
         
-        if ( $dropboxItem['is_dir'] == 1 )
+        if ( $dropboxItem->is_dir == 1 )
         {
             $ezNode = false;
             
@@ -355,14 +330,7 @@ class OCDropbox
                     $ezObject = $this->createContainer( basename( $path ), $parentNodeID, $class_identifier );
                     if ( $ezObject )
                     {
-                        if ( $cli ) 
-                        {
-                            $cli->output( 'RE-Create '. $ezObject->attribute('class_name') .': '. $path );
-                        }
-                        else
-                        {
-                            eZDebug::writeNotice( 'RE-Create '. $ezObject->attribute('class_name') .': '. $path, __METHOD__ );
-                        }
+                        $this->log( 'RE-Create '. $ezObject->attribute('class_name') .': '. $path, 'notice', __METHOD__ );
                         $dropboxObject->setAttribute( 'object_id', $ezObject->attribute('id') );
                         $dropboxObject->store();
                         $ezNodeId = $ezObject->attribute( 'main_node_id' );
@@ -384,20 +352,14 @@ class OCDropbox
                 
                 if ( $ezObject )
                 {
-                    if ( $cli ) 
-                    {
-                        $cli->output( 'Create '. $ezObject->attribute('class_name') .': '. $path );
-                    }
-                    else
-                    {
-                        eZDebug::writeNotice( 'Create '. $ezObject->attribute('class_name') .': '. $path, __METHOD__ );
-                    }                                        
+                    $this->log( 'Create '. $ezObject->attribute('class_name') .': '. $path, 'notice', __METHOD__ );
+                    
                     $dropboxObject = new OCDropboxObject( array(
                         'parent_id' => $parentDropboxObjectId, 
                         'is_dir'    => true,
-                        'hash'      => $dropboxItem['hash'],
-                        'path'      => $dropboxItem['path'],
-                        'modified'  => strtotime( $dropboxItem['modified'] ),
+                        'hash'      => $dropboxItem->hash,
+                        'path'      => $dropboxItem->path,
+                        'modified'  => strtotime( $dropboxItem->modified ),
                         'object_id' => $ezObject->attribute('id')
                     ));
                     $dropboxObject->store();
@@ -406,29 +368,23 @@ class OCDropbox
             }
 
             // itero il contenuto
-            if ( isset( $dropboxItem['contents'] ) )
+            if ( isset( $dropboxItem->contents ) )
             {
-                foreach( $dropboxItem['contents'] as $dropboxSubItem )
+                foreach( $dropboxItem->contents as $dropboxSubItem )
                 {
-                    $this->iterateData($dropboxSubItem, $dropboxObject->attribute('id'), $ezNodeId, $cli);
+                    $this->iterateData($dropboxSubItem, $dropboxObject->attribute('id'), $ezNodeId );
                 }
             }            
         }
         else
         {
             $dropboxObject = OCDropboxObject::fetchByPath( $path );
+            
             if ( !$dropboxObject )
             {
                 if ( $this->createFile( $dropboxItem, $parentNodeID, $parentDropboxObjectId ) )
                 {                    
-                    if ( $cli ) 
-                    {
-                        $cli->output( 'Import file: '. $path );
-                    }
-                    else
-                    {
-                        eZDebug::writeNotice( 'Import file: '. $path, __METHOD__ );
-                    }                     
+                    $this->log( 'Import file: '. $path, 'notice', __METHOD__ );
                 }
             }
             else
@@ -439,37 +395,50 @@ class OCDropbox
                     // uhm qualcuno ha rimosso i nodi... rifacciamoli!                    
                     if ( $this->createFile( $dropboxItem, $parentNodeID, $parentDropboxObjectId, true ) )
                     {                        
-                        if ( $cli ) 
-                        {
-                            $cli->output( 'RE-Import file: '. $path );
-                        }
-                        else
-                        {
-                            eZDebug::writeNotice( 'RE-Import file: '. $path, __METHOD__ );
-                        }                         
+                        $this->log( 'RE-Import file: '. $path, 'notice', __METHOD__ );                        
                     }
                 }
                 else
                 {
                     // il file è stato modificato? Aggiorno il nodo
-                    if ( strtotime( $dropboxItem['modified'] ) > $dropboxObject->attribute( 'modified' ) )
+                    if ( strtotime( $dropboxItem->modified ) > $dropboxObject->attribute( 'modified' ) )
                     {
                         if ( $this->createFile( $dropboxItem, $parentNodeID, $parentDropboxObjectId, true, $ezObject->attribute('main_node') ) )
                         {
-                            if ( $cli ) 
-                            {
-                                $cli->output( 'Update file: '. $path );
-                            }
-                            else
-                            {
-                                eZDebug::writeNotice( 'Update file: '. $path, __METHOD__ );
-                            }                              
+                            $this->log( 'Update file: '. $path, 'notice', __METHOD__ );
                         }
+                    }
+                    else
+                    {
+                        $this->log( 'File not modified', 'notice', __METHOD__ );
                     }
                 }
             }
         }                
         return;
+    }
+    
+    function log( $message, $level = 'notice', $method = false )
+    {
+        $cli = eZCLI::instance();
+        switch( $level )
+        {
+            case 'error':
+            {
+                eZDebug::writeError( $message, $method );
+                $cli->error( $message );
+            } break;            
+            case 'warning':
+            {
+                eZDebug::writeWarning( $message, $method );
+                $cli->warning( $message );
+            } break;
+            default:
+            {
+                eZDebug::writeNotice( $message, $method );
+                $cli->notice( $message );
+            } break;
+        }
     }
 
 }
