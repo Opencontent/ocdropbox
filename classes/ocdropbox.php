@@ -11,9 +11,9 @@ class OCDropbox
 {
     private static $instance;
     private $Data = array();
-    private	$oauth;
-	private	$dropbox;
-	private $basePath;
+    private $oauth;
+    private $dropbox;
+    private $basePath;
     private $ini;
     private $accountInfo;
     
@@ -68,18 +68,17 @@ class OCDropbox
         $OAuth = new \Dropbox\OAuth\Consumer\Curl( $consKey, $consSec, $storage );
         $this->dropbox = new \Dropbox\API( $OAuth );
         $this->dropbox->setResponseFormat( 'php' );
-        $this->accountInfo = $this->dropbox->accountInfo();
-        
+        $this->accountInfo = $this->dropbox->accountInfo();        
     }
     
-	public static function getInstance()
+    public static function getInstance()
     {
-		if ( self::$instance == null )
+	if ( self::$instance == null )
         {
-			self::$instance = new OCDropbox(); 
-		}
-        return self::$instance;		
+	    self::$instance = new OCDropbox(); 
 	}
+	return self::$instance;		
+    }
     
     function getBasePath()
     {
@@ -93,23 +92,23 @@ class OCDropbox
      * @return array
      * 
      */    
-    function getDropboxData($path = '')
+    function getDropboxData( $path = '' )
     {
-		
-    	if ( $path == '' ){
-	    	$path = $this->basePath; 
+    	if ( $path == '' )
+	{
+	    $path = $this->basePath; 
     	}
         
         try 
         {
-			$info = $this->dropbox->metaData( $path );
+	    $info = $this->dropbox->metaData( $path );
             //eZCLI::instance()->error( var_export( $info,1 ) );
             return $info['body'];
         }
         catch ( Exception $e)
         {
             $this->log( "Error in <". $path . ">: " . $e->getMessage() . "\n", 'error', __METHOD__ );
-        	return false;
+            return false;
         }        
 
     }           
@@ -278,7 +277,7 @@ class OCDropbox
         $this->log( 'Import in: '. $rootNode->attribute( 'name' ) . ' (path: ' . $rootNode->attribute( 'path_string' ) . ')', 'notice', __METHOD__ );
         
         // get Dropbox data
-        $data = $this->getDropboxData();        
+        $data = $this->getDropboxData();	
         if ( isset( $data->contents ) )
         {
             foreach( $data->contents as $content )
